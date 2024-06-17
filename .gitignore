@@ -1,0 +1,60 @@
+# https://github.com/TANAKADOREI
+
+# Note the applicable directory structure
+# /[GitDir]/
+# /[GitDir]/.git/
+# /[GitDir]/[Your files and directories...]
+# /[GitDir]/[Your Unity project directories...]
+
+# Ignore list in Unity project
+/*/*.sln
+/*/*.csproj
+/*/Temp/
+/*/obj/
+/*/*/ExportedObj/
+/*/*/.consulo/
+/*/*/*.unityproj
+/*/UserSettings/
+/*/Library/
+/*/Logs/
+/*/[Ll]ibrary/
+/*/[Tt]emp/
+/*/[Oo]bj/
+/*/[Bb]uild/
+/*/[Bb]uilds/
+/*/[Ll]ogs/
+/*/[Uu]ser[Ss]ettings/
+/*/[Mm]emoryCaptures/
+/*/[Rr]ecordings/
+/*/[Aa]ssets/Plugins/Editor/JetBrains*
+/*/[Aa]ssets/[Aa]ddressable[Aa]ssets[Dd]ata/*/*.bin*
+/*/[Aa]ssets/[Ss]treamingAssets/aa.meta
+/*/[Aa]ssets/[Ss]treamingAssets/aa/*
+
+# Global settings. Exclude specific directories
+.vs/
+.gradle/
+
+# Global settings. Exclude files with specific extensions
+*.suo
+*.tmp
+*.user
+*.userprefs
+*.pidb
+*.booproj
+*.svd
+*.pdb
+*.mdb
+*.opendb
+*.VC.db
+*.pidb.meta
+*.pdb.meta
+*.mdb.meta
+*.apk
+*.aab
+*.unitypackage
+*.app
+
+# Global settings. Exclude specific files
+sysinfo.txt
+crashlytics-build.properties
