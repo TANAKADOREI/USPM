@@ -5,6 +5,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Xml;
+using Codice.CM.Common.Serialization.Replication;
 using Unity.Plastic.Newtonsoft.Json;
 using Unity.Plastic.Newtonsoft.Json.Linq;
 using UnityEditor;
@@ -73,6 +74,52 @@ namespace TANAKADOREI.Unity.Editor.USPM
 	[Serializable]
 	public class USPManifest
 	{
+		private class Asset : ScriptableObject
+		{
+			[SerializeField]
+			private SubProjectInfo ManifestInfo;
+
+			public static Asset New(SubProjectInfo data)
+			{
+				var asset = CreateInstance<Asset>();
+				asset.ManifestInfo = data;
+				return asset;
+			}
+
+			public static void Delete(Asset asset)
+			{
+				Destroy(asset);
+			}
+		}
+
+		/// <summary>
+		/// 마지막 호출때 dispose인자에 참을 넣고 호출해주세요
+		/// </summary>
+		/// <param name="dispose"></param>
+		public delegate void OnEditGUIDelegate(bool dispose);
+
+		public static OnEditGUIDelegate OnEditProjectGUI(SubProjectInfo target)
+		{
+			var asset = Asset.New(target);
+			var so = new SerializedObject(asset);
+			var iter = so.GetIterator();
+
+			return (dispose) =>
+			{
+				if (dispose)
+				{
+					iter.Dispose();
+					so.Dispose();
+					Asset.Delete(asset);
+					return;
+				}
+
+				EditorGUILayout.PropertyField(iter, true);
+
+				//todo 이건 런타임에 만들어진 프로젝트일수도 있으므로 실제 디렉터리와 csproj가 있는지 확인하고 생성하는 버튼도 추가 필요
+			};
+		}
+
 		[Serializable]
 		public class SubProjectInfo
 		{
@@ -102,6 +149,16 @@ namespace TANAKADOREI.Unity.Editor.USPM
 			/// </summary>
 			[SerializeField]
 			public bool BuildExclude = false;
+
+			public SubProjectInfo(USPManifest manifest, string project_name)
+			{
+				if (manifest.ProjectInfos.Find(i => i.AssemblyName == project_name) != null)
+				{
+					throw new Exception("이미 존재하는 프로젝트");
+				}
+
+				ProjectName = project_name;
+			}
 
 			public override bool Equals(object obj)
 			{
@@ -284,27 +341,108 @@ namespace TANAKADOREI.Unity.Editor.USPM
 			GetWindow<USPManager_Window>("UnitySubProjectManager(USPM)");
 		}
 
-		USPManifest m_manifest = null;
-		int m_selected_sub_project_index = 0;
-		GUIContent[] m_display_sub_project_name = null;
-
-		void RefreshManifest()
+		public class RefreshTargets
 		{
-			m_manifest = USPM_Utilities.GetManifest(true);
-			m_selected_sub_project_index = 0;
-			m_display_sub_project_name = m_manifest.ProjectInfos.Select(i => new GUIContent($"\"{i.ProjectName}\" - \"{i.AssemblyName}\"")).ToArray();
+			USPManifest m_manifest = null;
+			Tuple<USPManifest.SubProjectInfo, USPManifest.OnEditGUIDelegate> m_select_project = null;
+
+			public bool ManifestLoaded => m_manifest != null;
+			public bool IsSelectedProject => m_select_project != null;
+
+			/// <summary>
+			/// 파일이 없으면 생성후 로드
+			/// </summary>
+			public void Refresh()
+			{
+				m_manifest = USPM_Utilities.GetManifest(true);
+				m_select_project = null;
+			}
+
+			public void Save()
+			{
+				USPM_Utilities.SetManifest(m_manifest);
+			}
+
+			public void OnGUI_SelectedProjectEdit()
+			{
+				if (m_select_project == null) return;
+				m_select_project.Item2(false);
+			}
+
+			public void OnGUI_SelectProject()
+			{
+				EditorGUILayout.LabelField("SelectProject");
+				//bool open = false;
+				for (int i = 0; i < m_manifest.ProjectInfos?.Count; i++)
+				{
+					// if (i % 4 == 0)
+					// {
+					// 	if (!open) EditorGUILayout.BeginHorizontal();
+					// 	else EditorGUILayout.EndHorizontal();
+					// 	open = !open;
+					// }
+
+					var project = m_manifest.ProjectInfos[i];
+
+					if (GUILayout.Button($"[{i}] : {project.ProjectName} : <{(project.BuildExclude ? "BuildExclude" : project.ImportIntoUnityProjectAfterBuild ? "AutoImport" : "Build")}>"))
+					{
+						SelectProject(project);
+					}
+				}
+
+				// if (open)
+				// {
+				// 	EditorGUILayout.EndHorizontal();
+				// 	open = false;
+				// }
+			}
+
+			public bool NewProject(string name)
+			{
+				try
+				{
+					var project = new USPManifest.SubProjectInfo(m_manifest, name);
+					m_manifest.ProjectInfos.Add(project);
+				}
+				catch (Exception e)
+				{
+					Debug.LogError(e);
+					return false;
+				}
+				return true;
+			}
+
+			public void DeleteSelectProject()
+			{
+				m_manifest.ProjectInfos.Remove(m_select_project.Item1);
+				SelectProject(null);
+			}
+
+			private void SelectProject(USPManifest.SubProjectInfo project)
+			{
+				if (m_select_project != null)
+				{
+					m_select_project.Item2(dispose: true); //dispose
+				}
+
+				if (project == null)
+				{
+					m_select_project = null;
+				}
+				else
+				{
+					m_select_project = new(project, USPManifest.OnEditProjectGUI(project));
+				}
+			}
 		}
 
-		void SaveManifest()
-		{
-			if (m_manifest != null) USPM_Utilities.SetManifest(m_manifest);
-		}
+		RefreshTargets m_refresh_target = new();
 
 		void OnGUI()
 		{
-			if (m_manifest != null)
+			m_refresh_target ??= new();
+			if (m_refresh_target.ManifestLoaded)
 			{
-				OnMainMenuGUI();
 				OnMainGUI();
 			}
 			else
@@ -321,11 +459,11 @@ namespace TANAKADOREI.Unity.Editor.USPM
 		{
 			if (GUILayout.Button("Setup"))
 			{
-				RefreshManifest();
+				m_refresh_target.Refresh();
 			}
 		}
 
-		void OnMainMenuGUI()
+		void OnMainGUI()
 		{
 			EditorGUILayout.BeginHorizontal();
 			{
@@ -337,23 +475,22 @@ namespace TANAKADOREI.Unity.Editor.USPM
 				}
 			}
 			EditorGUILayout.EndHorizontal();
-			
+
 			EditorGUILayout.BeginHorizontal();
 			{
 				if (GUILayout.Button("ReloadManifest"))
 				{
+					m_refresh_target.Refresh();
 				}
 				if (GUILayout.Button("SaveManifest"))
 				{
+					m_refresh_target.Save();
 				}
 			}
 			EditorGUILayout.EndHorizontal();
-			m_selected_sub_project_index = EditorGUILayout.Popup(new("ProjectSetting"), m_selected_sub_project_index, m_display_sub_project_name);
-		}
 
-		void OnMainGUI()
-		{
-
+			m_refresh_target.OnGUI_SelectProject();
+			if (m_refresh_target.IsSelectedProject) m_refresh_target.OnGUI_SelectedProjectEdit();
 		}
 	}
 }

@@ -56,5 +56,13 @@
         "temp/": true,
         "Temp/": true
     },
-    "dotnet.defaultSolution": "USPM.sln"
+	"dotnet.defaultSolution": "USPM.sln",
+	"cSpell.words": [
+		"classlib",
+		"Newtonsoft",
+		"Postprocessor",
+		"Scriptable",
+		"TANAKADOREI",
+		"USPM"
+	]
 }
