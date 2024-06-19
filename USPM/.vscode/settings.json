@@ -59,6 +59,8 @@
 	"dotnet.defaultSolution": "USPM.sln",
 	"cSpell.words": [
 		"classlib",
+		"mscorlib",
+		"netstandard",
 		"Newtonsoft",
 		"Postprocessor",
 		"Scriptable",

@@ -1,25 +1,147 @@
 using System;
-using System.Collections;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Xml;
-using Codice.CM.Common.Serialization.Replication;
 using Unity.Plastic.Newtonsoft.Json;
-using Unity.Plastic.Newtonsoft.Json.Linq;
 using Unity.VisualScripting;
 using UnityEditor;
 using UnityEngine;
-using UnityEngine.Serialization;
 using Debug = UnityEngine.Debug;
 
 #if UNITY_EDITOR
 /// <summary>
 /// UnitySubProjectManagement (USPM)
 /// </summary>
-namespace TANAKADOREI.Unity.Editor.USPM
+namespace TANAKADOREI.UnityEditor.USPM
 {
+	public class XML_Processor
+	{
+		public abstract class NodeProcessor
+		{
+			/// <summary>
+			/// 동일한 경로의 노드를 찾는다.
+			/// A/B/C이면 C를 찾음
+			/// </summary>
+			public readonly string TargetNodePath;
+
+			public NodeProcessor(string base_path, string name)
+			{
+				TargetNodePath = $"/{base_path}/{name}";
+			}
+
+			/// <summary>
+			/// Name과 동일한 이름을 찾는다
+			/// </summary>
+			/// <param name="source_node"></param>
+			public abstract void OnFoundIt(XmlDocument source_doc, XmlNode source_node);
+		}
+
+		private readonly XmlDocument SourceDoc;
+		private readonly NodeProcessor[] Processors;
+
+		public XML_Processor(XmlDocument source_doc, params NodeProcessor[] processor)
+		{
+			SourceDoc = source_doc;
+			Processors = processor;
+		}
+
+		public void Processing()
+		{
+			foreach (var proc in Processors)
+			{
+				foreach (XmlNode node in SourceDoc.SelectNodes(proc.TargetNodePath))
+				{
+					proc.OnFoundIt(SourceDoc, node);
+				}
+			}
+		}
+	}
+
+	public abstract class UnityCSharpProjXmlNodeProcessor : XML_Processor.NodeProcessor
+	{
+		const string CSPROJ_XML__ROOT_NODE = "Project";
+
+		public UnityCSharpProjXmlNodeProcessor(string base_path, string name) : base(base_path, name)
+		{
+		}
+
+		public class ItemGroup : UnityCSharpProjXmlNodeProcessor
+		{
+			public readonly static string[] IGNORE_FILTER = new string[]
+			{
+				"netstandard",
+				"Microsoft",
+				"System",
+				"mscorlib"
+			};
+
+			private readonly Dictionary<string, HashSet<string>> m_output_ref_dll_list;
+			private readonly Uri BaseDirectory;
+
+			public ItemGroup(XmlDocument source_doc, string source_doc_path, Dictionary<string, HashSet<string>> output_ref_dll_list) : base(CSPROJ_XML__ROOT_NODE, nameof(ItemGroup))
+			{
+				m_output_ref_dll_list = output_ref_dll_list;
+
+				var BaseDirectory = source_doc.SelectSingleNode("/Project/PropertyGroup/BaseDirectory")?.InnerText ?? ".";
+				BaseDirectory = Path.GetFullPath(Path.Combine(Path.GetDirectoryName(source_doc_path), BaseDirectory));
+
+				this.BaseDirectory = new Uri(BaseDirectory + Path.DirectorySeparatorChar);
+			}
+
+			private void AddDLL(string name, string path)// todo 일단 절대경로로 바꾸고, 위에 임포트 하는 버튼에서 붙여 넣을 프로젝트를 참고해 상대경로로 변환해서 넣기. 그럴려면 일단 원본 경로가 절대 였는지 기록하고 절대였다면 그대로 임포트 하고, 아니라면 프로젝트 위치 참고해서 상대경로로 변환
+			{
+				string result_path = null;
+
+				try
+				{
+					if (Path.IsPathRooted(path))
+					{
+						result_path = Path.GetFullPath(path);
+					}
+					else
+					{
+						Uri target_uri = new Uri(path);
+						Uri relative_uri = BaseDirectory.MakeRelativeUri(target_uri);
+						string relative_path = Uri.UnescapeDataString(relative_uri.ToString().Replace('/', Path.DirectorySeparatorChar));
+						result_path = relative_path;
+					}
+				}
+				catch (Exception e)
+				{
+					Debug.LogWarning($"처리하지 못한 DLL : {name}->{path}, {e}");
+					return;
+				}
+
+				if (result_path != null)
+				{
+					if (!m_output_ref_dll_list.ContainsKey(name))
+					{
+						m_output_ref_dll_list.Add(name, new());
+					}
+					m_output_ref_dll_list[name].Add(result_path);
+				}
+			}
+
+			public override void OnFoundIt(XmlDocument source_doc, XmlNode source_node)
+			{
+				foreach (XmlNode node in source_node)
+				{
+					if (node.Name == "Reference") // include네임스페이스별로 분리
+					{
+						string lib_name = node.Attributes["Include"].InnerText;
+						string lib_path = node["HintPath"].InnerText;
+
+						if (IGNORE_FILTER.Any(i => lib_name.StartsWith(i))) continue;
+
+						AddDLL(lib_name, lib_path);
+					}
+				}
+			}
+		}
+	}
+
 	public static class USPM_ConstDataList
 	{
 		public const string USPM = "USPM";
@@ -124,8 +246,40 @@ namespace TANAKADOREI.Unity.Editor.USPM
 				}
 
 				EditorGUILayout.LabelField("Selected Project Info...");
-				EditorGUILayout.TextField("Project Directory Path", target.CurrentProjectDirPath);
-				EditorGUILayout.TextField("`*.csproj` File Path", target.CurrentProjFilePath);
+				EditorGUILayout.TextField("Project Directory Path", target.ProjectName?.Length > 0 ? target.CurrentProjectDirPath : "<Project name required>");
+				EditorGUILayout.TextField("`*.csproj` File Path", target.ProjectName?.Length > 0 ? target.CurrentProjFilePath : "<Project name required>");
+
+				EditorGUILayout.LabelField("해당 USPM프로젝트에 참조 추가");
+				EditorGUI.indentLevel++;
+				using (var lib_info_iter = manifest.UnityProjectRefLibs.GetEnumerator())
+				{
+					while (lib_info_iter.MoveNext())
+					{
+						var lib_info = lib_info_iter.Current;
+						var lib_name = lib_info_iter.Current.Key;
+
+						EditorGUILayout.LabelField(lib_name);
+
+						EditorGUI.indentLevel++;
+						using (var lib_path_iter = lib_info.Value.GetEnumerator())
+						{
+							while (lib_path_iter.MoveNext())
+							{
+								var lib_path = lib_path_iter.Current;
+
+								EditorGUILayout.BeginHorizontal();
+								EditorGUILayout.TextField(lib_path);
+								if (GUILayout.Button("Import"))
+								{
+									USPM_Utilities.AddReference(target, lib_path);
+								}
+								EditorGUILayout.EndHorizontal();
+							}
+						}
+						EditorGUI.indentLevel--;
+					}
+				}
+				EditorGUI.indentLevel--;
 
 				EditorGUILayout.PropertyField(iter, true);
 				so.ApplyModifiedProperties();
@@ -137,15 +291,6 @@ namespace TANAKADOREI.Unity.Editor.USPM
 		{
 			[SerializeField, Header("프로젝트 이름")]
 			public string ProjectName = null;
-			[SerializeField, Header("`<Project>/<PropertyGroup>/<AssemblyName>`에 강제 삽입됨.")]
-			public string AssemblyName = null;
-			[SerializeField, Header("`<Project>/<PropertyGroup>/<RootNamespace>`에 강제 삽입됨.")]
-			public string RootNamespace = null;
-			/// <summary>
-			/// 유니티 csproj의 Reference Include=""의 어트리뷰트값
-			/// </summary>
-			[SerializeField, Header("현재 유니티 프로젝트의 참조 라이브러리에서 `<Reference Include=\"\">`의 어트리뷰트와 비교해 찾으면, `<Project>/<ItemGroup>/`에 강제 삽입됨.")]
-			public string[] References = null;
 			/// <summary>
 			/// 빌드후 유니티 프로젝트로 임포트
 			/// </summary>
@@ -174,21 +319,28 @@ namespace TANAKADOREI.Unity.Editor.USPM
 
 			public override string ToString()
 			{
-				return $"Project: {ProjectName}, Assembly: {AssemblyName}";
+				return $"Project: {ProjectName}";
 			}
 
+			/// <summary>
+			/// 현재 프로젝트 디렉터리의 부모 디렉터리 경로
+			/// </summary>
+			[JsonIgnore]
+			public string CurrentProjectParentDirPath => USPM_ConstDataList.USPM_DirPath;
 			/// <summary>
 			/// 현재 프로젝트 디렉터리 경로
 			/// </summary>
 			/// <returns></returns>
+			[JsonIgnore]
 			public string CurrentProjectDirPath => Path.Combine(USPM_ConstDataList.USPM_DirPath, ProjectName);
-
 			/// <summary>
 			/// 현재 프로젝트의 CSPROJ파일 경로
 			/// </summary>
 			/// <returns></returns>
+			[JsonIgnore]
 			public string CurrentProjFilePath => Path.Combine(CurrentProjectDirPath, $"{ProjectName}.csproj");
 
+			[JsonIgnore]
 			public bool IsBuildReady => Directory.Exists(CurrentProjectDirPath) && File.Exists(CurrentProjFilePath);
 		}
 
@@ -204,6 +356,13 @@ namespace TANAKADOREI.Unity.Editor.USPM
 		[SerializeField]
 		public List<SubProjectInfo> ProjectInfos = new();
 
+		/// <summary>
+		/// 유니티프로젝트가 지닌 라이브러리들
+		/// </summary>
+		/// <returns></returns>
+		public Dictionary<string, HashSet<string>> UnityProjectRefLibs = new();
+
+		[JsonIgnore]
 		public string ThisManifestFilePath => USPM_ConstDataList.USPM_ManifestFilePath;
 
 		/// <summary>
@@ -292,7 +451,7 @@ namespace TANAKADOREI.Unity.Editor.USPM
 		public static void CreateIfNotFoundCSharpSubProject(USPManifest.SubProjectInfo project)
 		{
 			string command = "dotnet";
-			string arguments = $"new classlib -o \"{Path.Combine(project.CurrentProjectDirPath, project.ProjectName)}\"";
+			string arguments = $"new classlib -o \"{Path.Combine(project.CurrentProjectParentDirPath, project.ProjectName)}\"";
 			Debug.LogWarning($"새 프로젝트 생성됨: {project.ProjectName}, Log:{ExecuteCommand(command, arguments)}");
 		}
 
@@ -342,7 +501,14 @@ namespace TANAKADOREI.Unity.Editor.USPM
 				Directory.CreateDirectory(USPM_ConstDataList.USPM_DirPath);
 			}
 
-			File.WriteAllText(USPM_ConstDataList.USPM_ManifestFilePath, JsonConvert.SerializeObject(manifest));
+			File.WriteAllText(USPM_ConstDataList.USPM_ManifestFilePath, JsonConvert.SerializeObject(manifest, Unity.Plastic.Newtonsoft.Json.Formatting.Indented));
+		}
+
+		public static void AddReference(USPManifest.SubProjectInfo project, string lib_path)
+		{
+			string build_command = "dotnet";
+			string build_arguments = $"add {project.CurrentProjectDirPath} reference {lib_path}";
+			Debug.LogWarning($"참조추가: {project.ProjectName}, Log: {ExecuteCommand(build_command, build_arguments)}");
 		}
 	}
 
@@ -454,23 +620,23 @@ namespace TANAKADOREI.Unity.Editor.USPM
 
 				m_manifest.ThisManifestName = EditorGUILayout.TextField(nameof(m_manifest.ThisManifestName), m_manifest.ThisManifestName);
 				EditorGUILayout.TextField(nameof(m_manifest.ThisManifestFilePath), m_manifest.ThisManifestFilePath);
-				EditorGUILayout.LabelField("Projects", m_manifest.ProjectInfos?.Count.ToString());
-				if (GUILayout.Button("[Tool] : Import an already existing project"))
+				EditorGUILayout.LabelField("[USPM]Projects", m_manifest.ProjectInfos?.Count.ToString());
+				EditorGUILayout.LabelField("UnityProjectRefLibs", m_manifest.UnityProjectRefLibs?.Count.ToString());
+				if (GUILayout.Button("[Tool] : Import libraries referenced by Unity project"))
 				{
-					//todo
-				}
-				if (GUILayout.Button("[Tool] : Projects Build Ready Check"))
-				{
-					try
+					static void Proc(USPManifest manifest, string path)
 					{
-						Debug.Log(m_manifest.IsBuildReady() ? $"빌드 준비됨" : $"빌드 준비 안됨");
+						XmlDocument source_doc = new XmlDocument();
+						source_doc.LoadXml(File.ReadAllText(path));
+						var proc = new XML_Processor(source_doc, new UnityCSharpProjXmlNodeProcessor.ItemGroup(source_doc, path, manifest.UnityProjectRefLibs));
+						proc.Processing();
 					}
-					catch (Exception e)
-					{
-						Debug.Log($"빌드 준비 안됨. 예외로 인한. {e}");
-					}
+
+					m_manifest.UnityProjectRefLibs.Clear();
+					Proc(m_manifest, USPM_ConstDataList.UnityProject_ProjFilePath);
+					Proc(m_manifest, USPM_ConstDataList.UnityProject_EditorProjFilePath);
 				}
-				if (GUILayout.Button("[Tool] : ProjectsBuildSetting"))
+				if (GUILayout.Button("[Tool] : Build"))
 				{
 					if (m_manifest.ProjectInfos.Any(i => i.ProjectName?.Length <= 0))
 					{
@@ -498,6 +664,7 @@ namespace TANAKADOREI.Unity.Editor.USPM
 						{
 							USPM_Utilities.CreateIfNotFoundCSharpSubProject(m_manifest.ProjectInfos[i]);
 						}
+						Save();
 						Debug.LogWarning("빌드 준비됨");
 					}
 
@@ -574,9 +741,11 @@ namespace TANAKADOREI.Unity.Editor.USPM
 		}
 
 		RefreshTargets m_refresh_target = null;
+		Vector2 m_scroll_vec = Vector2.zero;
 
 		void OnGUI()
 		{
+			m_scroll_vec = EditorGUILayout.BeginScrollView(m_scroll_vec);
 			m_refresh_target ??= new(load: true);
 			if (m_refresh_target.ManifestLoaded)
 			{
@@ -586,6 +755,7 @@ namespace TANAKADOREI.Unity.Editor.USPM
 			{
 				OnSetupGUI();
 			}
+			EditorGUILayout.EndScrollView();
 		}
 
 		/// <summary>
