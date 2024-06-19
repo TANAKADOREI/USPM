@@ -9,6 +9,7 @@
 # Ignore list in Unity project
 /*/*.sln
 /*/*.csproj
+/*/USPM/**
 /*/Temp/
 /*/obj/
 /*/*/ExportedObj/
