@@ -25,7 +25,7 @@ namespace TANAKADOREI.UnityEditor.USPM
 
 		public static void Log(object o) { if (NoForcedLogging && Enable) UnityEngine.Debug.Log(o); }
 
-		public static void LogWarning(object o) { if (NoForcedLogging &&Enable) UnityEngine.Debug.LogWarning(o); }
+		public static void LogWarning(object o) { if (NoForcedLogging && Enable) UnityEngine.Debug.LogWarning(o); }
 
 		public static void LogError(object o) { UnityEngine.Debug.LogError(o); }
 	}
@@ -216,7 +216,7 @@ namespace TANAKADOREI.UnityEditor.USPM
 		{
 			public const string ASSET_PATH_USPM_DATA = nameof(USPM_DATA);
 			[SerializeField]
-			public SubProjectInfo USPM_DATA = new();
+			public SubProjectInfo USPM_DATA = null;
 
 			public static SubProjectRenderingClass New(SubProjectInfo data)
 			{
@@ -231,11 +231,56 @@ namespace TANAKADOREI.UnityEditor.USPM
 			}
 		}
 
+		private class USPManifestRenderingClass : ScriptableObject
+		{
+			public const string ASSET_PATH_USPM_DATA = nameof(USPM_DATA);
+			[SerializeField]
+			public USPManifest USPM_DATA = null;
+
+			public static USPManifestRenderingClass New(USPManifest data)
+			{
+				var asset = CreateInstance<USPManifestRenderingClass>();
+				asset.USPM_DATA = data;
+				return asset;
+			}
+
+			public static void Delete(USPManifestRenderingClass asset)
+			{
+				DestroyImmediate(asset);
+			}
+		}
+
 		/// <summary>
 		/// 마지막 호출때 dispose인자에 참을 넣고 호출해주세요
 		/// </summary>
 		/// <param name="dispose"></param>
 		public delegate void OnEditGUIDelegate(bool dispose);
+
+		public static OnEditGUIDelegate OnEditManifestGUI(USPManifest target)
+		{
+			var asset = USPManifestRenderingClass.New(target);
+			var so = new SerializedObject(asset);
+			var iter = so.FindPropertyOrFail(SubProjectRenderingClass.ASSET_PATH_USPM_DATA);
+
+			return (dispose) =>
+			{
+				if (dispose)
+				{
+					so.ApplyModifiedProperties();
+					iter.Dispose();
+					so.Dispose();
+					USPManifestRenderingClass.Delete(asset);
+					return;
+				}
+
+				if (target.EDITORGUI__MANIFEST_DATA_FOLDOUT = EditorGUILayout.Foldout(target.EDITORGUI__MANIFEST_DATA_FOLDOUT, "ManifestRawData..."))
+				{
+					EditorGUILayout.PropertyField(iter, true);
+				}
+
+				so.ApplyModifiedProperties();
+			};
+		}
 
 		public static OnEditGUIDelegate OnEditProjectGUI(USPManifest manifest, SubProjectInfo target)
 		{
@@ -309,7 +354,7 @@ namespace TANAKADOREI.UnityEditor.USPM
 					}
 				}
 
-				if (target.EDITORGUI__PROJECT_DATA = EditorGUILayout.Foldout(target.EDITORGUI__PROJECT_DATA, "ProjectData..."))
+				if (target.EDITORGUI__PROJECT_DATA_FOLDOUT = EditorGUILayout.Foldout(target.EDITORGUI__PROJECT_DATA_FOLDOUT, "ProjectData..."))
 				{
 					EditorGUILayout.PropertyField(iter, true);
 				}
@@ -347,7 +392,7 @@ namespace TANAKADOREI.UnityEditor.USPM
 			[HideInInspector]
 			public bool EDITORGUI__PROJECT_INFO_FOLDOUT;
 			[HideInInspector]
-			public bool EDITORGUI__PROJECT_DATA;
+			public bool EDITORGUI__PROJECT_DATA_FOLDOUT;
 			#endregion
 
 			public override bool Equals(object obj)
@@ -417,10 +462,18 @@ namespace TANAKADOREI.UnityEditor.USPM
 		/// [include_name,[absolute_path,path]]
 		/// </summary>
 		/// <returns></returns>
+		[HideInInspector]
 		public Dictionary<string, HashSet<string>> UnityProjectRefLibs = new();
 
 		[JsonIgnore]
 		public string ThisManifestFilePath => USPM_ConstDataList.USPM_ManifestFilePath;
+
+		#region Editor Data
+
+		[HideInInspector]
+		private bool EDITORGUI__MANIFEST_DATA_FOLDOUT;
+
+		#endregion
 
 		/// <summary>
 		/// 런타임 생성용, 자동 Init됨
@@ -614,7 +667,7 @@ namespace TANAKADOREI.UnityEditor.USPM
 		{
 			Debug.LogWarning("참조 추가 작업");
 
-			project
+			project.
 		}
 
 		public static void RefreshThisUnityProjectReferenceList(USPManifest m_manifest, bool include_unity_engine, bool include_unity_editor)
@@ -664,7 +717,7 @@ namespace TANAKADOREI.UnityEditor.USPM
 				EditorApplication.RepaintHierarchyWindow();
 			}
 
-			USPManifest m_manifest = null;
+			Tuple<USPManifest, USPManifest.OnEditGUIDelegate> m_manifest = null;
 			Tuple<USPManifest.SubProjectInfo, USPManifest.OnEditGUIDelegate> m_select_project = null;
 
 			public bool ManifestLoaded => m_manifest != null;
@@ -680,34 +733,39 @@ namespace TANAKADOREI.UnityEditor.USPM
 			/// </summary>
 			public void Refresh()
 			{
-				m_manifest = USPM_Utilities.GetManifest(true);
+				if (m_manifest != null)
+				{
+					m_manifest.Item2(true);
+				}
+				var manifest = USPM_Utilities.GetManifest(true);
+				m_manifest = new(manifest, USPManifest.OnEditManifestGUI(manifest));
 				SelectProject(null);
 			}
 
 			public void Save()
 			{
-				USPM_Utilities.SetManifest(m_manifest);
+				USPM_Utilities.SetManifest(m_manifest.Item1);
 			}
 
 			public void Reset()
 			{
 				SelectProject(null);
-				m_manifest.ProjectInfos.Clear();
+				m_manifest.Item1.ProjectInfos.Clear();
 				SelectProject(null);
 			}
 
 			public void TrySaveBuild()
 			{
-				if (!m_manifest.CheckBuildReady())
+				if (!m_manifest.Item1.CheckBuildReady())
 				{
 					return;
 				}
 
 				Save();
 
-				for (int i = 0; i < m_manifest.ProjectInfos?.Count; i++)
+				for (int i = 0; i < m_manifest.Item1.ProjectInfos?.Count; i++)
 				{
-					var project = m_manifest.ProjectInfos[i];
+					var project = m_manifest.Item1.ProjectInfos[i];
 					if (project.BuildExclude)
 					{
 						Debug.Log($"빌드 제외됨 : {project}");
@@ -735,29 +793,30 @@ namespace TANAKADOREI.UnityEditor.USPM
 
 			public void OnGUI_BaseEditor()
 			{
-				m_manifest.ThisManifestName = EditorGUILayout.TextField(nameof(m_manifest.ThisManifestName), m_manifest.ThisManifestName);
-				EditorGUILayout.TextField(nameof(m_manifest.ThisManifestFilePath), m_manifest.ThisManifestFilePath);
-				EditorGUILayout.LabelField("[USPM]Projects", m_manifest.ProjectInfos?.Count.ToString());
-				EditorGUILayout.LabelField("UnityProjectRefLibs", m_manifest.UnityProjectRefLibs?.Count.ToString());
+				m_manifest.Item2(false);
+				m_manifest.Item1.ThisManifestName = EditorGUILayout.TextField(nameof(m_manifest.Item1.ThisManifestName), m_manifest.Item1.ThisManifestName);
+				EditorGUILayout.TextField(nameof(m_manifest.Item1.ThisManifestFilePath), m_manifest.Item1.ThisManifestFilePath);
+				EditorGUILayout.LabelField("[USPM]Projects", m_manifest.Item1.ProjectInfos?.Count.ToString());
+				EditorGUILayout.LabelField("UnityProjectRefLibs", m_manifest.Item1.UnityProjectRefLibs?.Count.ToString());
 				if (GUILayout.Button("[Tool] : Refresh this Unity project references list"))
 				{
-					USPM_Utilities.RefreshThisUnityProjectReferenceList(m_manifest, true, true);
+					USPM_Utilities.RefreshThisUnityProjectReferenceList(m_manifest.Item1, true, true);
 				}
 				if (GUILayout.Button("[Tool] : USPM Projects Build Check"))
 				{
-					m_manifest.CheckBuildReady();
+					m_manifest.Item1.CheckBuildReady();
 				}
 				if (GUILayout.Button("[Tool] : USPM Projects Build"))
 				{
-					if (m_manifest.CheckBuildReady())
+					if (m_manifest.Item1.CheckBuildReady())
 					{
 						Debug.LogWarning("이미 빌드 준비됨");
 					}
 					else
 					{
-						for (int i = 0; i < m_manifest.ProjectInfos?.Count; i++)
+						for (int i = 0; i < m_manifest.Item1.ProjectInfos?.Count; i++)
 						{
-							USPM_Utilities.CreateIfNotFoundCSharpSubProject(m_manifest.ProjectInfos[i]);
+							USPM_Utilities.CreateIfNotFoundCSharpSubProject(m_manifest.Item1.ProjectInfos[i]);
 						}
 						Save();
 						Debug.LogWarning("빌드 준비됨");
@@ -769,7 +828,7 @@ namespace TANAKADOREI.UnityEditor.USPM
 			{
 				EditorGUILayout.LabelField("SelectProject");
 				//bool open = false;
-				for (int i = 0; i < m_manifest.ProjectInfos?.Count; i++)
+				for (int i = 0; i < m_manifest.Item1.ProjectInfos?.Count; i++)
 				{
 					// if (i % 4 == 0)
 					// {
@@ -778,7 +837,7 @@ namespace TANAKADOREI.UnityEditor.USPM
 					// 	open = !open;
 					// }
 
-					var project = m_manifest.ProjectInfos[i];
+					var project = m_manifest.Item1.ProjectInfos[i];
 
 					if (GUILayout.Button($"[{i}] : {project.ProjectName} : <{(project.BuildExclude ? "BuildExclude" : project.ImportIntoUnityProjectAfterBuild ? "AutoImport" : "Build")}>"))
 					{
@@ -799,7 +858,7 @@ namespace TANAKADOREI.UnityEditor.USPM
 				try
 				{
 					var project = new USPManifest.SubProjectInfo();
-					m_manifest.ProjectInfos.Add(project);
+					m_manifest.Item1.ProjectInfos.Add(project);
 				}
 				catch (Exception e)
 				{
@@ -811,7 +870,7 @@ namespace TANAKADOREI.UnityEditor.USPM
 
 			public void DeleteSelectProject()
 			{
-				m_manifest.ProjectInfos.Remove(m_select_project.Item1);
+				m_manifest.Item1.ProjectInfos.Remove(m_select_project.Item1);
 				SelectProject(null);
 			}
 
@@ -828,7 +887,7 @@ namespace TANAKADOREI.UnityEditor.USPM
 				}
 				else
 				{
-					m_select_project = new(project, USPManifest.OnEditProjectGUI(m_manifest, project));
+					m_select_project = new(project, USPManifest.OnEditProjectGUI(m_manifest.Item1, project));
 				}
 			}
 		}
