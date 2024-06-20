@@ -59,6 +59,7 @@
 	"dotnet.defaultSolution": "USPM.sln",
 	"cSpell.words": [
 		"classlib",
+		"EDITORGUI",
 		"mscorlib",
 		"netstandard",
 		"Newtonsoft",
