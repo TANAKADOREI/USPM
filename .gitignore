@@ -58,8 +58,8 @@
 *.aab
 *.unitypackage
 *.app
+*.unity
 
 # Global settings. Exclude specific files
 sysinfo.txt
 crashlytics-build.properties
-*.unity
