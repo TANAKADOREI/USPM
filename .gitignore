@@ -10,12 +10,15 @@
 /*/*.sln
 /*/*.csproj
 /*/USPM/**
+/*/Assets/Plugins/
+/*/Assets/Plugins.meta
 /*/Temp/
 /*/obj/
 /*/*/ExportedObj/
 /*/*/.consulo/
 /*/*/*.unityproj
 /*/UserSettings/
+/*/ProjectSettings/
 /*/Library/
 /*/Logs/
 /*/[Ll]ibrary/
@@ -59,3 +62,4 @@
 # Global settings. Exclude specific files
 sysinfo.txt
 crashlytics-build.properties
+*.unity
