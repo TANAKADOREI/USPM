@@ -63,3 +63,5 @@
 # Global settings. Exclude specific files
 sysinfo.txt
 crashlytics-build.properties
+
+!USPM.unitypackage
